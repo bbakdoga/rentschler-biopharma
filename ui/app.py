@@ -12,10 +12,23 @@ from db.session import get_session
 from db.models import Batch, Page, ValidationResult, Field, Signature, Personnel
 from config import OCR_CONFIDENCE_WARN
 
+THEME = {
+    'bg': '#EEF2F7',
+    'panel': '#FFFFFF',
+    'panel_alt': '#F7F9FC',
+    'brand': '#163A5F',
+    'brand_alt': '#245B8E',
+    'accent': '#0EA5A4',
+    'text': '#1F2937',
+    'muted': '#6B7280',
+    'border': '#D7DFEA',
+    'status': '#E9EEF5',
+}
+
 SEVERITY_COLOR = {
-    'error':   '#FFCCCC',
-    'warning': '#FFF2CC',
-    'info':    '#DDEBF7',
+    'error': '#FDE2E1',
+    'warning': '#FFF4D8',
+    'info': '#E4F0FF',
 }
 
 # Distinct, high-contrast colours cycled for the viewer's bounding boxes and
@@ -44,8 +57,9 @@ class BPRApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("BPR Validation Tool")
-        self.root.geometry("1280x820")
-        self.root.configure(bg='#F5F7FA')
+        self.root.geometry("1360x860")
+        self.root.minsize(1180, 760)
+        self.root.configure(bg=THEME['bg'])
         self._processing = False
         # Page-viewer state
         self._viewer_pages = []
@@ -61,36 +75,43 @@ class BPRApp:
         self._style()
 
         # ── toolbar ──────────────────────────────────────────────────────────
-        bar = tk.Frame(self.root, bg='#1F3864', height=52)
+        bar = tk.Frame(self.root, bg=THEME['brand'], height=70)
         bar.pack(fill='x')
         bar.pack_propagate(False)
-        tk.Label(bar, text="BPR Validation Tool", bg='#1F3864', fg='white',
-                 font=('Arial', 14, 'bold')).pack(side='left', padx=16, pady=12)
-        self._toolbar_button(bar, "Export Excel", self._export, '#27AE60', padx=8)
+        title_wrap = tk.Frame(bar, bg=THEME['brand'])
+        title_wrap.pack(side='left', padx=16, pady=8)
+        tk.Label(title_wrap, text="BPR Validation Console", bg=THEME['brand'], fg='white',
+                 font=('Segoe UI Semibold', 14)).pack(anchor='w')
+        tk.Label(title_wrap, text="OCR, validation, and report export in one workflow",
+                 bg=THEME['brand'], fg='#D5E2F1', font=('Segoe UI', 9)).pack(anchor='w')
+
+        self._toolbar_button(bar, "Export Excel", self._export, '#1D9D64', padx=8)
         self._toolbar_button(bar, "Export Boxed PDF", self._export_boxed_pdf,
-                             '#8E44AD', padx=4)
-        self._upload_btn = self._toolbar_button(bar, "Upload PDF", self._upload, '#2980B9')
-        self._toolbar_button(bar, "Delete Batch", self._delete_batch, '#C0392B')
+                             '#2563EB', padx=4)
+        self._upload_btn = self._toolbar_button(bar, "Upload PDF", self._upload, '#0C7FB0')
+        self._toolbar_button(bar, "Delete Batch", self._delete_batch, '#C93A34')
 
         # ── progress bar (hidden until processing) ───────────────────────────
         self._prog_var = tk.DoubleVar()
-        self._prog_frame = tk.Frame(self.root, bg='#F5F7FA')
+        self._prog_frame = tk.Frame(self.root, bg=THEME['bg'])
         self._prog = ttk.Progressbar(self._prog_frame, variable=self._prog_var,
-                                     maximum=100)
+                         maximum=100, style='BPR.Horizontal.TProgressbar')
         self._prog.pack(side='left', fill='x', expand=True, padx=(8, 6), pady=4)
-        self._prog_pct = tk.Label(self._prog_frame, text="0%", bg='#F5F7FA',
-                                  fg='#1F3864', font=('Arial', 9, 'bold'), width=5)
+        self._prog_pct = tk.Label(self._prog_frame, text="0%", bg=THEME['bg'],
+                      fg=THEME['brand'], font=('Segoe UI Semibold', 9), width=5)
         self._prog_pct.pack(side='right', padx=(0, 10))
 
         # ── main pane ─────────────────────────────────────────────────────────
         pane = ttk.PanedWindow(self.root, orient='horizontal')
         pane.pack(fill='both', expand=True, padx=6, pady=6)
+        pane.configure(style='BPR.TPanedwindow')
 
         # left: batch list
-        left = tk.Frame(pane, bg='white', relief='flat')
+        left = tk.Frame(pane, bg=THEME['panel'], relief='flat',
+                highlightthickness=1, highlightbackground=THEME['border'])
         pane.add(left, weight=1)
-        tk.Label(left, text="Processed Batches", bg='white',
-                 font=('Arial', 10, 'bold'), fg='#1F3864').pack(anchor='w', padx=8, pady=(8, 2))
+        tk.Label(left, text="Processed Batches", bg=THEME['panel'],
+             font=('Segoe UI Semibold', 10), fg=THEME['brand']).pack(anchor='w', padx=10, pady=(10, 4))
 
         self._batch_tree = ttk.Treeview(left, columns=('bno', 'pc', 'status'),
                                          show='headings', selectmode='browse')
@@ -108,16 +129,16 @@ class BPRApp:
         self._batch_tree.tag_configure('failed',    foreground='#C0392B')
 
         # right: detail tabs
-        right = tk.Frame(pane, bg='#F5F7FA')
+        right = tk.Frame(pane, bg=THEME['bg'])
         pane.add(right, weight=4)
 
         # summary cards
-        cards = tk.Frame(right, bg='#F5F7FA')
+        cards = tk.Frame(right, bg=THEME['bg'])
         cards.pack(fill='x', padx=6, pady=(4, 0))
-        self._c_err  = self._card(cards, "Errors",   "—", '#C0392B')
-        self._c_warn = self._card(cards, "Warnings", "—", '#E67E22')
-        self._c_info = self._card(cards, "Info",     "—", '#2980B9')
-        self._c_stat = self._card(cards, "Status",   "—", '#7F8C8D')
+        self._c_err = self._card(cards, "Errors", "—", '#C93A34')
+        self._c_warn = self._card(cards, "Warnings", "—", '#D9861D')
+        self._c_info = self._card(cards, "Info", "—", '#0C7FB0')
+        self._c_stat = self._card(cards, "Status", "—", '#64748B')
 
         # tabs
         nb = ttk.Notebook(right)
@@ -144,8 +165,8 @@ class BPRApp:
         # status bar
         self._status_var = tk.StringVar(value="Ready — upload a PDF to begin.")
         tk.Label(self.root, textvariable=self._status_var,
-                 relief='sunken', anchor='w', bg='#ECF0F1',
-                 font=('Arial', 9)).pack(fill='x', side='bottom')
+                 relief='flat', anchor='w', bg=THEME['status'], fg=THEME['text'],
+                 padx=10, pady=5, font=('Segoe UI', 9)).pack(fill='x', side='bottom')
 
     def _toolbar_button(self, parent, text, command, color, padx=4):
         """A colored, clickable label that behaves like a button.
@@ -155,7 +176,7 @@ class BPRApp:
         every platform.
         """
         btn = tk.Label(parent, text=f"  {text}  ", bg=color, fg='white',
-                       font=('Arial', 10), cursor='hand2', padx=6, pady=4)
+                   font=('Segoe UI Semibold', 9), cursor='hand2', padx=8, pady=5)
         btn.pack(side='right', padx=padx, pady=10)
         btn._base_color = color
         btn._enabled = True
@@ -185,21 +206,60 @@ class BPRApp:
     def _style(self):
         s = ttk.Style()
         s.theme_use('clam')
-        s.configure('TNotebook.Tab', font=('Arial', 10))
-        s.configure('Treeview',      font=('Arial', 10), rowheight=22)
-        s.configure('Treeview.Heading', font=('Arial', 10, 'bold'))
+        s.configure('BPR.TPanedwindow', background=THEME['bg'], sashwidth=6)
+
+        s.configure('TNotebook', background=THEME['bg'], borderwidth=0)
+        s.configure('TNotebook.Tab',
+                font=('Segoe UI Semibold', 9),
+                padding=(12, 8),
+                background=THEME['panel_alt'],
+                foreground=THEME['muted'])
+        s.map('TNotebook.Tab',
+              background=[('selected', THEME['panel'])],
+              foreground=[('selected', THEME['brand'])])
+
+        s.configure('Treeview',
+                font=('Segoe UI', 9),
+                rowheight=24,
+                background=THEME['panel'],
+                fieldbackground=THEME['panel'],
+                foreground=THEME['text'],
+                bordercolor=THEME['border'])
+        s.configure('Treeview.Heading',
+                font=('Segoe UI Semibold', 9),
+                background='#EAF0F8',
+                foreground=THEME['brand'],
+                relief='flat')
+        s.map('Treeview',
+              background=[('selected', '#D8E8FF')],
+              foreground=[('selected', THEME['text'])])
+
+        s.configure('BPR.Horizontal.TProgressbar',
+                troughcolor='#DCE6F3',
+                background=THEME['accent'],
+                bordercolor='#DCE6F3',
+                lightcolor=THEME['accent'],
+                darkcolor=THEME['accent'])
+
+        s.configure('ViewerNav.TButton',
+                font=('Segoe UI Semibold', 9),
+                padding=(9, 4),
+                foreground=THEME['brand'])
 
     def _card(self, parent, title, value, color):
-        f = tk.Frame(parent, bg=color, width=110, height=68)
+        f = tk.Frame(parent, bg=color, width=130, height=76,
+                     highlightthickness=1, highlightbackground=self._darken(color, 0.7))
         f.pack(side='left', padx=5, pady=4)
         f.pack_propagate(False)
-        vl = tk.Label(f, text=value, bg=color, fg='white', font=('Arial', 20, 'bold'))
-        vl.pack(pady=(8, 0))
-        tk.Label(f, text=title, bg=color, fg='white', font=('Arial', 9)).pack()
-        return {'val': vl, 'frame': f, 'color': color}
+        vl = tk.Label(f, text=value, bg=color, fg='white', font=('Segoe UI Semibold', 22))
+        vl.pack(pady=(7, 0))
+        tl = tk.Label(f, text=title, bg=color, fg='white', font=('Segoe UI', 9))
+        tl.pack()
+        return {'val': vl, 'title': tl, 'frame': f, 'color': color}
 
     def _make_tab(self, nb, title, headers, widths):
-        frame = tk.Frame(nb, bg='white')
+        frame = tk.Frame(nb, bg=THEME['panel'], highlightthickness=1,
+                         highlightbackground=THEME['border'])
         nb.add(frame, text=title)
         cols = [h.lower().replace(' ', '_') for h in headers]
         tv   = ttk.Treeview(frame, columns=cols, show='headings')
@@ -214,36 +274,36 @@ class BPRApp:
 
     # ── side-by-side page viewer ───────────────────────────────────────────────
     def _make_viewer_tab(self, nb):
-        frame = tk.Frame(nb, bg='white')
+        frame = tk.Frame(nb, bg=THEME['panel'])
         nb.add(frame, text="Page Viewer")
 
         # navigation bar
-        nav = tk.Frame(frame, bg='#EAEDF1')
+        nav = tk.Frame(frame, bg='#EAF0F8')
         nav.pack(fill='x')
-        tk.Button(nav, text='◀ Prev', command=self._viewer_prev,
-                  relief='flat').pack(side='left', padx=(6, 2), pady=4)
-        tk.Button(nav, text='Next ▶', command=self._viewer_next,
-                  relief='flat').pack(side='left', padx=2, pady=4)
-        self._viewer_nav = tk.Label(nav, text='—', bg='#EAEDF1',
-                                    fg='#1F3864', font=('Arial', 10, 'bold'))
+        ttk.Button(nav, text='Prev', command=self._viewer_prev,
+                   style='ViewerNav.TButton').pack(side='left', padx=(6, 2), pady=4)
+        ttk.Button(nav, text='Next', command=self._viewer_next,
+                   style='ViewerNav.TButton').pack(side='left', padx=2, pady=4)
+        self._viewer_nav = tk.Label(nav, text='—', bg='#EAF0F8',
+                                    fg=THEME['brand'], font=('Segoe UI Semibold', 10))
         self._viewer_nav.pack(side='left', padx=12)
 
         pane = ttk.PanedWindow(frame, orient='horizontal')
         pane.pack(fill='both', expand=True)
 
         # left: scanned page + bounding boxes
-        left = tk.Frame(pane, bg='#2B2B2B')
+        left = tk.Frame(pane, bg='#1F2933')
         pane.add(left, weight=3)
-        self._viewer_canvas = tk.Canvas(left, bg='#2B2B2B', highlightthickness=0)
+        self._viewer_canvas = tk.Canvas(left, bg='#1F2933', highlightthickness=0)
         self._viewer_canvas.pack(fill='both', expand=True)
         self._viewer_canvas.bind('<Configure>', lambda _e: self._viewer_draw())
         self._viewer_canvas.bind('<Button-1>', self._viewer_canvas_click)
 
         # right: extracted fields, colour-matched to the boxes
-        rightf = tk.Frame(pane, bg='white')
+        rightf = tk.Frame(pane, bg=THEME['panel'])
         pane.add(rightf, weight=2)
-        tk.Label(rightf, text="Extracted fields on this page", bg='white',
-                 font=('Arial', 10, 'bold'), fg='#1F3864').pack(
+        tk.Label(rightf, text="Extracted fields on this page", bg=THEME['panel'],
+                 font=('Segoe UI Semibold', 10), fg=THEME['brand']).pack(
                      anchor='w', padx=6, pady=(6, 2))
         tv = ttk.Treeview(rightf, columns=('param', 'value', 'conf'),
                           show='headings')
@@ -258,7 +318,7 @@ class BPRApp:
         self._viewer_tree = tv
 
         legend = tk.Label(
-            rightf, bg='white', fg='#7F8C8D', font=('Arial', 8),
+            rightf, bg=THEME['panel'], fg=THEME['muted'], font=('Segoe UI', 8),
             text="Solid box = confident   ·   dashed box / ⚠ = uncertain OCR "
                  "(likely handwriting)")
         legend.pack(anchor='w', padx=6, pady=(0, 4))
@@ -589,6 +649,7 @@ class BPRApp:
             color = '#27AE60' if ok else '#C0392B'
             self._c_stat['frame'].config(bg=color)
             self._c_stat['val'].config(bg=color)
+            self._c_stat['title'].config(bg=color)
 
             # Validation results tab
             tv = self._tab_val
