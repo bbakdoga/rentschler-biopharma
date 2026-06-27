@@ -2,8 +2,10 @@
 """
 BPR Validation Tool — entry point.
 Run:  python main.py
-      python main.py path/to/batch.pdf          # headless processing
-      python main.py --revalidate <batch_id>     # re-run rules only
+      python main.py path/to/batch.pdf            # headless processing
+      python main.py --revalidate <batch_id>      # re-run rules only
+      python main.py --export <batch_id> out.pdf  # annotated PDF (viewable)
+      python main.py --export-xlsx <batch_id> out.xlsx
 """
 import sys
 from pathlib import Path
@@ -82,6 +84,18 @@ def main():
 
     if args[0] == '--revalidate' and len(args) == 2:
         _revalidate(int(args[1]))
+        return
+
+    if args[0] == '--export' and len(args) == 3:
+        from reports.annotated_pdf_exporter import AnnotatedPDFExporter
+        AnnotatedPDFExporter().export(int(args[1]), args[2])
+        print(f"Annotated PDF written to {args[2]}")
+        return
+
+    if args[0] == '--export-xlsx' and len(args) == 3:
+        from reports.excel_exporter import ExcelExporter
+        ExcelExporter().export(int(args[1]), args[2])
+        print(f"Excel report written to {args[2]}")
         return
 
     pdf = args[0]

@@ -25,11 +25,17 @@ env/
 *.sqlite
 *.sqlite3
 
-# Generated OCR pages and exported reports
+# Generated OCR pages
 temp_pages/
-reports/*.xlsx
-reports/*.csv
-reports/*.pdf
+
+# Confidential input documents and generated reports (ANY location).
+# This repo must never contain real batch records, answer keys, or exports.
+*.pdf
+*.xlsx
+*.xls
+*.csv
+*.tif
+*.tiff
 
 # Logs
 *.log

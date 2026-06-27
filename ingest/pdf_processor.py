@@ -2,7 +2,7 @@ import fitz          # PyMuPDF
 import io
 from pathlib import Path
 from PIL import Image
-from config import IMAGE_DPI, TEMP_DIR
+from config import DISPLAY_IMAGE_EXTENSION, IMAGE_DPI, TEMP_DIR
 
 
 class PDFProcessor:
@@ -29,8 +29,8 @@ class PDFProcessor:
         return path
 
     def page_image_path(self, page_num: int) -> Path:
-        """Path where this page's display image is/should be stored."""
-        return self.out_dir / f"page_{page_num + 1:03d}.png"
+        """Return the path for the lightweight internal viewer image."""
+        return self.out_dir / f"page_{page_num + 1:03d}{DISPLAY_IMAGE_EXTENSION}"
 
     def get_embedded_text(self, page_num: int) -> str:
         """Return any digitally-embedded text (empty for pure scans)."""

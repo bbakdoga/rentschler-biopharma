@@ -9,7 +9,11 @@ class TesseractEngine:
     def __init__(self, lang: str = OCR_LANG):
         self.lang = lang
 
-    def extract_text(self, img: Image.Image, psm: int = 6) -> str:
+    def extract_text(self, img: Image.Image, psm: int = 6,
+                     source_img: Image.Image | None = None) -> str:
+        # source_img is accepted for interface parity with LLMEngine (the
+        # vision backend reads the colour display image); Tesseract ignores it
+        # and reads the binarised OCR image.
         config = f"--psm {psm} --oem 3"
         try:
             return pytesseract.image_to_string(img, lang=self.lang, config=config)
@@ -17,7 +21,9 @@ class TesseractEngine:
             # Fallback to English only
             return pytesseract.image_to_string(img, lang="eng", config=config)
 
-    def extract_words_with_conf(self, img: Image.Image) -> list[dict]:
+    def extract_words_with_conf(self, img: Image.Image,
+                                source_img: Image.Image | None = None
+                                ) -> list[dict]:
         config = "--psm 6 --oem 3"
         data = pytesseract.image_to_data(
             img, lang=self.lang, config=config,

@@ -66,7 +66,9 @@ class BPRApp:
         bar.pack_propagate(False)
         tk.Label(bar, text="BPR Validation Tool", bg='#1F3864', fg='white',
                  font=('Arial', 14, 'bold')).pack(side='left', padx=16, pady=12)
-        self._toolbar_button(bar, "Export Excel",  self._export,       '#27AE60', padx=8)
+        self._toolbar_button(bar, "Export Excel", self._export, '#27AE60', padx=8)
+        self._toolbar_button(bar, "Export Boxed PDF", self._export_boxed_pdf,
+                             '#8E44AD', padx=4)
         self._upload_btn = self._toolbar_button(bar, "Upload PDF", self._upload, '#2980B9')
         self._toolbar_button(bar, "Delete Batch", self._delete_batch, '#C0392B')
 
@@ -283,7 +285,8 @@ class BPRApp:
             for pg in pages:
                 flds = (session.query(Field)
                         .filter(Field.page_id == pg.id,
-                                Field.bbox_x.isnot(None)).all())
+                                Field.bbox_x.isnot(None))
+                        .order_by(Field.id).all())
                 data.append({
                     'page_num': pg.page_num, 'section': pg.section,
                     'image_path': pg.image_path,
@@ -490,6 +493,29 @@ class BPRApp:
             from reports.excel_exporter import ExcelExporter
             ExcelExporter().export(bid, path)
             messagebox.showinfo("Exported", f"Report saved:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Export failed", str(e))
+
+    def _export_boxed_pdf(self):
+        """Save a vector-annotated copy of the selected batch's source PDF."""
+        sel = self._batch_tree.selection()
+        if not sel:
+            messagebox.showwarning("No selection", "Select a batch first.")
+            return
+
+        bid = int(sel[0])
+        path = filedialog.asksaveasfilename(
+            title="Save PDF with Bounding Boxes",
+            defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")],
+        )
+        if not path:
+            return
+
+        try:
+            from reports.annotated_pdf_exporter import AnnotatedPDFExporter
+            AnnotatedPDFExporter().export(bid, path)
+            messagebox.showinfo("Exported", f"Annotated PDF saved:\n{path}")
         except Exception as e:
             messagebox.showerror("Export failed", str(e))
 

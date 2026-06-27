@@ -9,7 +9,7 @@ from typing import Callable
 
 from ingest.pdf_processor import PDFProcessor
 from ingest.image_preprocess import ImagePreprocessor
-from ocr.tesseract_engine import TesseractEngine
+from ocr.engine import get_ocr_engine
 from extract.field_extractor import (
     extract_cover, extract_personnel, extract_signatures,
     extract_checkboxes, extract_timestamps, extract_calculations,
@@ -19,6 +19,7 @@ from extract import generic_extractor as generic
 from validate.engine import ValidationEngine
 from db.models import Batch, Page, Field, Signature, Personnel
 from db.session import get_session
+from config import DISPLAY_IMAGE_FORMAT, DISPLAY_JPEG_QUALITY
 
 
 # ── section identification ────────────────────────────────────────────────────
@@ -133,13 +134,14 @@ class BPRProcessor:
 
     def __init__(self):
         self.pre     = ImagePreprocessor()
-        self.ocr     = TesseractEngine()
+        self.ocr     = get_ocr_engine()
         self.val_eng = ValidationEngine()
 
     # ── public entry point ────────────────────────────────────────────────────
     def process(self, pdf_path: str,
                 progress: Callable[[int, int, str], None] | None = None) -> int:
         session = get_session()
+        pdf = None
         try:
             batch = Batch(file_path=pdf_path, status='processing',
                           created_at=datetime.utcnow())
@@ -166,21 +168,34 @@ class BPRProcessor:
                 # the same geometry, so field boxes line up on the display.
                 proc_img, disp_img = self.pre.process_full_page_with_display(img)
                 img_path = pdf.page_image_path(pg)
-                disp_img.save(img_path, "PNG")
+                disp_img.save(
+                    img_path,
+                    DISPLAY_IMAGE_FORMAT,
+                    quality=DISPLAY_JPEG_QUALITY,
+                    optimize=True,
+                )
 
                 report(pg + 0.5, "reading text (OCR)…")
                 # One OCR pass that yields word boxes; the plain text is
                 # reconstructed from them for section identification.
+                # The colour display image shares geometry with proc_img; the
+                # LLM backend reads handwriting crops from it for better
+                # fidelity (Tesseract ignores source_img).
                 try:
-                    words = self.ocr.extract_words_with_conf(proc_img)
+                    words = self.ocr.extract_words_with_conf(
+                        proc_img, source_img=disp_img)
                     text  = generic.words_to_text(words)
                 except Exception:
-                    words, text = [], self.ocr.extract_text(proc_img)
+                    words, text = [], ''
 
-                # Fall back to embedded PDF text if OCR is empty
+                # No word-level text (e.g. a fully handwritten page): try a
+                # full-page read — the LLM backend transcribes the whole page
+                # here — then fall back to embedded PDF text.
+                if not text.strip():
+                    words = []
+                    text  = self.ocr.extract_text(proc_img, source_img=disp_img)
                 if not text.strip():
                     text  = pdf.get_embedded_text(pg)
-                    words = []
 
                 report(pg + 0.9, "extracting fields…")
                 section = _identify_section(text, pg + 1)
@@ -201,8 +216,6 @@ class BPRProcessor:
                 # rather than held for the entire document.
                 session.commit()
 
-            pdf.close()
-
             if progress:
                 progress(97, 100, "Running validation rules…")
 
@@ -214,6 +227,8 @@ class BPRProcessor:
             session.rollback()
             raise
         finally:
+            if pdf is not None:
+                pdf.close()
             session.close()
 
     # ── per-page field ingestion ──────────────────────────────────────────────
