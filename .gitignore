@@ -1,0 +1,41 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local secrets and environment settings
+.env
+.env.*
+!.env.example
+
+# Runtime databases and SQLite sidecar files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Generated OCR pages and exported reports
+temp_pages/
+reports/*.xlsx
+reports/*.csv
+reports/*.pdf
+
+# Logs
+*.log
+
+# IDE, assistant, and operating-system files
+.vscode/
+.idea/
+.claude/
+.DS_Store
