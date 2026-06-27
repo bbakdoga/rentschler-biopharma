@@ -33,6 +33,27 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 # alternatives: "llama3.2-vision:11b", "minicpm-v", "granite3.2-vision".
 OLLAMA_VL_MODEL = os.environ.get("OLLAMA_VL_MODEL", "qwen2.5vl:7b")
 OLLAMA_TIMEOUT = float(os.environ.get("OLLAMA_TIMEOUT", "180"))
+# Max tokens for a whole-page transcription. A dense BPR page needs far more
+# than the per-crop budget, or the structured read is truncated mid-page.
+OLLAMA_PAGE_NUM_PREDICT = int(os.environ.get("OLLAMA_PAGE_NUM_PREDICT", "2048"))
+# Context window for a whole-page read. A full-page image is ~3.5–4k tokens on
+# its own; with the prompt and the generated transcription it must exceed
+# Ollama's 4096 default or the request is rejected (exceed_context_size_error).
+OLLAMA_PAGE_NUM_CTX = int(os.environ.get("OLLAMA_PAGE_NUM_CTX", "8192"))
+# Use the vision-LLM's structured whole-page read as the authoritative text for
+# section ID + regex extraction (keeps Tesseract word boxes for the viewer).
+# Only applies when OCR_BACKEND=llm. Turn off to revert to the word-patch text.
+LLM_STRUCTURED_PAGE = os.environ.get("LLM_STRUCTURED_PAGE", "1") not in ("0", "")
+
+# Only spend a (slow) vision-LLM page read on pages that actually contain
+# handwriting. We detect that from Tesseract's confidences: handwriting reads
+# low. A page is treated as handwritten — and sent to the LLM — when it has at
+# least LLM_PAGE_HW_MIN_WORDS words at/below LLM_CORRECT_BELOW confidence, OR
+# that fraction of low-confidence words exceeds LLM_PAGE_HW_MIN_FRAC. Printed
+# pages stay on fast Tesseract-only text. Set LLM_PAGE_HW_MIN_WORDS=0 to force
+# the LLM on every page.
+LLM_PAGE_HW_MIN_WORDS = int(os.environ.get("LLM_PAGE_HW_MIN_WORDS", "6"))
+LLM_PAGE_HW_MIN_FRAC = float(os.environ.get("LLM_PAGE_HW_MIN_FRAC", "0.10"))
 
 # Re-read a word run with the vision-LLM when Tesseract confidence is at or
 # below this (handwriting tends to score low). Defaults to the warn threshold.

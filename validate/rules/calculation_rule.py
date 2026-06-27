@@ -13,8 +13,10 @@ Formulas verified:
   C_Cake   = m_B20-ST [g] / V_Netto_nPZ [L]         (§5.12.4)
   Actual_Beladung = LoadVol × C_Cake / V_Ofen        (§5.12.4)
 """
+from collections import defaultdict
+
 from validate.rules.base_rule import BaseRule
-from db.models import Batch, Field
+from db.models import Batch, Field, Page
 from config import CALC_TOLERANCE
 
 
@@ -34,20 +36,31 @@ def _get(session, batch_id, name, section=None):
     return None
 
 
-def _get_all(session, batch_id, name):
+def _page_operands(session, batch_id, names):
+    """Group the given fields by the page they were read from:
+
+        page_id → {field_name: (section, page_num, value)}
+
+    A calculation's operands then come from the SAME page, so each
+    intermediate's mass balance — typically repeated under the same section on
+    separate pages — is checked against its own brutto/tara/density instead of
+    the first one found anywhere in the section."""
+    pages: dict = defaultdict(dict)
     rows = (
-        session.query(Field)
-        .filter(Field.batch_id == batch_id, Field.field_name == name)
+        session.query(Field, Page)
+        .join(Page, Field.page_id == Page.id)
+        .filter(Field.batch_id == batch_id, Field.field_name.in_(names))
         .all()
     )
-    out = []
-    for r in rows:
-        if r.parsed_value:
-            try:
-                out.append((r.section, float(r.parsed_value.replace(',', '.'))))
-            except ValueError:
-                pass
-    return out
+    for f, p in rows:
+        if not f.parsed_value:
+            continue
+        try:
+            val = float(f.parsed_value.replace(',', '.'))
+        except ValueError:
+            continue
+        pages[p.id][f.field_name] = (f.section, p.page_num, val)
+    return pages
 
 
 class CalculationRule(BaseRule):
@@ -59,33 +72,43 @@ class CalculationRule(BaseRule):
         results = []
         bid = batch.id
 
-        # ── m_Netto = m_Brutto − m_Tara (per section) ──────────────────────
-        for section_m_tara, m_tara in _get_all(session, bid, 'm_tara'):
-            m_brutto = _get(session, bid, 'm_brutto', section_m_tara)
-            m_netto  = _get(session, bid, 'm_netto',  section_m_tara)
-            if m_brutto is not None and m_netto is not None:
-                expected = m_brutto - m_tara
-                if abs(expected - m_netto) > self.T:
-                    results.append(self.err(
-                        bid,
-                        f"§{section_m_tara}: m_Netto should be "
-                        f"{expected:.2f} (={m_brutto}−{m_tara}) "
-                        f"but recorded {m_netto}",
-                        section=section_m_tara, field_name='m_netto'
-                    ))
+        # ── m_Netto = m_Brutto − m_Tara, V_Netto = m_Netto / ρ ─────────────
+        #   Operands are paired within the page they were read from, so each
+        #   intermediate's mass balance is checked against its own brutto/tara/
+        #   density — not the first one found in the section (which produced
+        #   false errors when a section held several intermediates).
+        operand_pages = _page_operands(
+            session, bid,
+            ('m_tara', 'm_brutto', 'm_netto', 'density', 'v_netto'))
+        for fld in operand_pages.values():
+            if not ('m_tara' in fld and 'm_brutto' in fld and 'm_netto' in fld):
+                continue
+            sec, pnum, m_tara = fld['m_tara']
+            m_brutto = fld['m_brutto'][2]
+            m_netto  = fld['m_netto'][2]
+            expected = m_brutto - m_tara
+            if abs(expected - m_netto) > self.T:
+                results.append(self.err(
+                    bid,
+                    f"§{sec}: m_Netto should be "
+                    f"{expected:.2f} (={m_brutto}−{m_tara}) "
+                    f"but recorded {m_netto}",
+                    section=sec, page_num=pnum, field_name='m_netto'
+                ))
 
-                # ── V_Netto = m_Netto / ρ ──────────────────────────────────
-                density = _get(session, bid, 'density', section_m_tara)
-                v_netto = _get(session, bid, 'v_netto', section_m_tara)
-                if density and v_netto and density > 0:
+            # ── V_Netto = m_Netto / ρ ──────────────────────────────────────
+            if 'density' in fld and 'v_netto' in fld:
+                density = fld['density'][2]
+                v_netto = fld['v_netto'][2]
+                if density > 0:
                     expected_v = m_netto / density
                     if abs(expected_v - v_netto) > self.T:
                         results.append(self.err(
                             bid,
-                            f"§{section_m_tara}: V_Netto should be "
+                            f"§{sec}: V_Netto should be "
                             f"{expected_v:.2f} L (={m_netto}/{density}) "
                             f"but recorded {v_netto}",
-                            section=section_m_tara, field_name='v_netto'
+                            section=sec, page_num=pnum, field_name='v_netto'
                         ))
 
         # ── m_B20-ST = Z1 + Z2 (§5.9) ──────────────────────────────────────

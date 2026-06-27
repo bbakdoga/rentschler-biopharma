@@ -23,6 +23,7 @@ from config import (
     LLM_CROP_PAD,
     LLM_MIN_CROP_WIDTH,
     LLM_MIN_CROP_HEIGHT,
+    LLM_STRUCTURED_PAGE,
 )
 from ocr.tesseract_engine import TesseractEngine
 from ocr.ollama_client import OllamaVisionClient
@@ -49,6 +50,17 @@ class LLMEngine:
             return page
         return self.tess.extract_text(img, psm=psm)
 
+    def structured_page_text(self, img: Image.Image,
+                             source_img: Image.Image | None = None
+                             ) -> str | None:
+        """Authoritative structured whole-page transcription used for section
+        identification and regex extraction. Returns ``None`` if the server is
+        unreachable so the caller can fall back to the word-reconstructed text.
+        Word boxes (geometry) still come from Tesseract via
+        ``extract_words_with_conf`` — this only supplies better *text*."""
+        return self.client.read_structured_page(
+            source_img if source_img is not None else img)
+
     def extract_words_with_conf(self, img: Image.Image,
                                 source_img: Image.Image | None = None
                                 ) -> list[dict]:
@@ -59,6 +71,13 @@ class LLMEngine:
         if not words:
             # Nothing detected (e.g. a fully handwritten page). Let the caller
             # fall back to a full-page LLM read via extract_text().
+            return words
+        if LLM_STRUCTURED_PAGE:
+            # Handwriting is recovered by the full-page structured read, not by
+            # per-word crop re-reads. Skip the (slow) per-crop LLM calls and
+            # return Tesseract's geometry + confidences unchanged — the caller
+            # uses those confidences to decide whether the page even needs the
+            # LLM, and the structured read supplies the accurate text.
             return words
         src = source_img if source_img is not None else img
         return self._correct(words, src)

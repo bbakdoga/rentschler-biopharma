@@ -19,7 +19,10 @@ from extract import generic_extractor as generic
 from validate.engine import ValidationEngine
 from db.models import Batch, Page, Field, Signature, Personnel
 from db.session import get_session
-from config import DISPLAY_IMAGE_FORMAT, DISPLAY_JPEG_QUALITY
+from config import (
+    DISPLAY_IMAGE_FORMAT, DISPLAY_JPEG_QUALITY, LLM_STRUCTURED_PAGE,
+    LLM_CORRECT_BELOW, LLM_PAGE_HW_MIN_WORDS, LLM_PAGE_HW_MIN_FRAC,
+)
 
 
 # ── section identification ────────────────────────────────────────────────────
@@ -62,6 +65,76 @@ def _identify_section(text: str, page_num: int) -> str:
         if marker.lower() in t:
             return sec_id
     return f'p{page_num}'
+
+
+_SEC_NUM_PREFIX = re.compile(r'^[®•∙·\-*\s]*\d+(?:\.\d+)*\.?\s+')
+
+
+def _marker_in_line(line: str) -> str | None:
+    """If a line is a section heading, return its section id, else ``None``.
+
+    A heading is a short line whose text (after an optional leading section
+    number / bullet) STARTS WITH a marker — not merely contains it. This stops
+    body text like 'B10-PP - aus Zyklus 1 vorhanden' from being read as a §5.1
+    heading just because it mentions 'Zyklus'. When several markers match, the
+    most specific (longest) wins — '5.3.1 Bilanzierung' → §5.3.1, not §5.1."""
+    s = line.strip()
+    if not s or len(s) > 70:
+        return None
+    body = _SEC_NUM_PREFIX.sub('', s).lstrip('®•∙·-* ').strip()
+    low = body.lower()
+    best, best_len = None, 0
+    for marker, sec_id in _SECTION_MARKERS:
+        m = marker.lower()
+        if low.startswith(m) and len(marker) > best_len:
+            best, best_len = sec_id, len(marker)
+    return best
+
+
+def _sectionize(text: str, page_num: int) -> list[tuple[str, str]]:
+    """Split a page's text into ``(section_id, segment_text)`` blocks in
+    reading order, so each field is attributed to the heading it appears under
+    (a Bilanzierung row → §5.3.1, not the page's first heading). A page with no
+    heading yields a single ``p{n}`` block."""
+    segments: list[tuple[str, str]] = []
+    cur_sec: str | None = None
+    cur: list[str] = []
+    for line in text.splitlines():
+        sec = _marker_in_line(line)
+        if sec is not None:
+            if cur:
+                segments.append((cur_sec or f'p{page_num}', '\n'.join(cur)))
+            cur_sec, cur = sec, [line]
+        else:
+            cur.append(line)
+    if cur:
+        segments.append((cur_sec or f'p{page_num}', '\n'.join(cur)))
+    if not segments:
+        segments = [(f'p{page_num}', text)]
+    return segments
+
+
+def _primary_section(segments: list[tuple[str, str]], page_num: int) -> str:
+    """The page's headline section — the first real heading in reading order."""
+    for sec, _ in segments:
+        if not sec.startswith('p'):
+            return sec
+    return f'p{page_num}'
+
+
+def _has_handwriting(words: list[dict]) -> bool:
+    """True when a page looks handwritten (worth a vision-LLM read), judged
+    from Tesseract's confidences — handwriting reads low. No word boxes at all
+    (a scan Tesseract couldn't read) also counts as handwriting."""
+    if not words:
+        return True
+    if LLM_PAGE_HW_MIN_WORDS <= 0:        # 0 → force the LLM on every page
+        return True
+    low = sum(1 for w in words
+              if (c := w.get('conf')) is not None and 0 <= c <= LLM_CORRECT_BELOW)
+    if low >= LLM_PAGE_HW_MIN_WORDS:
+        return True
+    return (low / len(words)) >= LLM_PAGE_HW_MIN_FRAC
 
 
 # ── specialist field extractors per section ───────────────────────────────────
@@ -118,6 +191,21 @@ _DATETIME_FIELD_LABELS = {
     'start_temperierung_z2':     r'Start Temperierung\s+\(Übertrag Kapitel 5\.5\.1\)\s+(\d{1,2}[./]\d{2}[./]\d{4}\s*/?\s*\d{1,2}:\d{2})',
     'ende_temperierung_z2':      r'Ende Temperierung\s+\(Übertrag Kapitel 5\.12\.1\)\s+(\d{1,2}[./]\d{2}[./]\d{4}\s*/?\s*\d{1,2}:\d{2})',
 }
+
+# ── mass / volume fields (generic, any section) ───────────────────────────────
+_MASS_VOLUME_FIELDS = [
+    ('m_tara',   r'm\s+Tara\s+([\d.,]+)',   'kg'),
+    ('m_brutto', r'm\s+Brutto\s+(?:vPZ\s+)?([\d.,]+)', 'kg'),
+    ('m_netto',  r'm\s+Netto\s+(?:vPZ\s+)?([\d.,]+)',  'kg'),
+    ('v_netto',  r'V\s+Netto\s+(?:vPZ\s+)?([\d.,]+)',  'L'),
+    ('density',  r'ρ\s*=\s*([\d.,]+)',                  'kg/L'),
+    ('m_b10pp_z1', r'm\s+B10-PP\s+Z1\s*\[g\]\s*=.*?=\s*([\d.,]+)', 'g'),
+    ('m_b10pp_z2', r'm\s+B10-PP\s+Z2\s*\[g\]\s*=.*?=\s*([\d.,]+)', 'g'),
+    ('m_b20st',    r'm\s+B20-ST\s*\[g\]\s*=.*?=\s*([\d.,]+)',       'g'),
+    ('beladung',   r'Beladung\s*\[g\s*Cake/L.*?\]\s*=.*?=\s*([\d.,]+)', 'g/L'),
+    ('v_ofen_bak_b20', r'V\s+Ofen\s+BAK\s+B20.*?([\d.,]+)',         'L'),
+    ('v_netto_npz',    r'V\s+(?:B20-ST\s+)?Netto\s+nPZ.*?([\d.,]+)','L'),
+]
 
 # ── slot counting for line-count rule ─────────────────────────────────────────
 _SLOT_RE = re.compile(r'_\s+_\s+_')   # "_ _ _" → 3 slots
@@ -176,21 +264,41 @@ class BPRProcessor:
                 )
 
                 report(pg + 0.5, "reading text (OCR)…")
-                # One OCR pass that yields word boxes; the plain text is
-                # reconstructed from them for section identification.
-                # The colour display image shares geometry with proc_img; the
-                # LLM backend reads handwriting crops from it for better
-                # fidelity (Tesseract ignores source_img).
+                # Word boxes (geometry) always come from Tesseract — the LLM
+                # backend additionally re-reads handwritten runs in place. These
+                # power the viewer overlays and the bbox-anchored generic
+                # fields, regardless of where the authoritative text comes from.
                 try:
                     words = self.ocr.extract_words_with_conf(
                         proc_img, source_img=disp_img)
-                    text  = generic.words_to_text(words)
                 except Exception:
-                    words, text = [], ''
+                    words = []
 
-                # No word-level text (e.g. a fully handwritten page): try a
-                # full-page read — the LLM backend transcribes the whole page
-                # here — then fall back to embedded PDF text.
+                # Authoritative text for section ID + regex extraction. With the
+                # LLM backend we prefer a structured whole-page transcription
+                # (keeps each label on the same line as its value, so values are
+                # never paired with the wrong column) — but only spend that slow
+                # read on pages that actually contain handwriting. Printed pages
+                # stay on fast Tesseract text reconstructed from the word boxes.
+                text = ''
+                use_llm = (LLM_STRUCTURED_PAGE
+                           and hasattr(self.ocr, 'structured_page_text')
+                           and _has_handwriting(words))
+                if use_llm:
+                    report(pg + 0.5, "reading handwriting (LLM)…")
+                    try:
+                        text = self.ocr.structured_page_text(
+                            proc_img, source_img=disp_img) or ''
+                    except Exception:
+                        text = ''
+                if not text.strip():
+                    try:
+                        text = generic.words_to_text(words)
+                    except Exception:
+                        text = ''
+
+                # No text at all (e.g. a fully handwritten page with no word
+                # boxes): try a plain full-page read, then embedded PDF text.
                 if not text.strip():
                     words = []
                     text  = self.ocr.extract_text(proc_img, source_img=disp_img)
@@ -198,7 +306,8 @@ class BPRProcessor:
                     text  = pdf.get_embedded_text(pg)
 
                 report(pg + 0.9, "extracting fields…")
-                section = _identify_section(text, pg + 1)
+                segments = _sectionize(text, pg + 1)
+                section  = _primary_section(segments, pg + 1)
 
                 # We deliberately do NOT persist the page's full text /
                 # explanatory prose — only the extracted parameter→value
@@ -211,7 +320,8 @@ class BPRProcessor:
                 session.add(page)
                 session.flush()
 
-                self._ingest_page(batch, page, text, section, words, session)
+                self._ingest_page(batch, page, text, section, segments,
+                                  words, session)
                 # Commit per page so the write lock is released frequently
                 # rather than held for the entire document.
                 session.commit()
@@ -233,14 +343,16 @@ class BPRProcessor:
 
     # ── per-page field ingestion ──────────────────────────────────────────────
     def _ingest_page(self, batch: Batch, page: Page,
-                     text: str, section: str, words: list, session):
+                     text: str, section: str,
+                     segments: list[tuple[str, str]], words: list, session):
         bid = batch.id
         pid = page.id
 
-        def add_field(name, raw, parsed, unit='', conf=None, bbox=None):
+        def add_field(name, raw, parsed, unit='', conf=None, bbox=None,
+                      sec=None):
             bx, by, bw, bh = bbox if bbox else (None, None, None, None)
             session.add(Field(
-                batch_id=bid, page_id=pid, section=section,
+                batch_id=bid, page_id=pid, section=sec or section,
                 field_name=name, raw_value=str(raw),
                 parsed_value=str(parsed), unit=unit, confidence=conf,
                 bbox_x=bx, bbox_y=by, bbox_w=bw, bbox_h=bh,
@@ -308,45 +420,41 @@ class BPRProcessor:
             if m:
                 add_field(fname, m.group(1), m.group(1))
 
-        # ── calculation values ────────────────────────────────────────────────
-        calc = extract_calculations(text)
-        for key, val in calc.items():
-            add_field(key, val, val)
+        # ── section-level extractors ──────────────────────────────────────────
+        #   Run per heading segment so each value is attributed to the section
+        #   it actually appears under (e.g. a Bilanzierung mass-balance row maps
+        #   to §5.3.1, not the page's first heading). This keeps the operands of
+        #   a calculation in the same section, so the rules pair the right
+        #   numbers instead of grabbing a value from an unrelated column.
+        for seg_section, seg_text in segments:
+            # calculation values
+            calc = extract_calculations(seg_text)
+            for key, val in calc.items():
+                add_field(key, val, val, sec=seg_section)
 
-        # ── section-specific named fields ─────────────────────────────────────
-        for spec_section, specs in _NAMED_FIELDS.items():
-            if section != spec_section:
-                continue
-            for fname, pat, unit in specs:
-                m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
+            # section-specific named fields
+            for fname, pat, unit in _NAMED_FIELDS.get(seg_section, []):
+                m = re.search(pat, seg_text, re.IGNORECASE | re.DOTALL)
                 if m:
                     raw = m.group(1).strip()
                     num = parse_number(raw)
-                    add_field(fname, raw, str(num) if num is not None else raw, unit)
+                    add_field(fname, raw, str(num) if num is not None else raw,
+                              unit, sec=seg_section)
 
-        # ── mass-volume fields (generic, any section) ─────────────────────────
-        for fname, pat, unit in [
-            ('m_tara',   r'm\s+Tara\s+([\d.,]+)',   'kg'),
-            ('m_brutto', r'm\s+Brutto\s+(?:vPZ\s+)?([\d.,]+)', 'kg'),
-            ('m_netto',  r'm\s+Netto\s+(?:vPZ\s+)?([\d.,]+)',  'kg'),
-            ('v_netto',  r'V\s+Netto\s+(?:vPZ\s+)?([\d.,]+)',  'L'),
-            ('density',  r'ρ\s*=\s*([\d.,]+)',                  'kg/L'),
-            ('m_b10pp_z1', r'm\s+B10-PP\s+Z1\s*\[g\]\s*=.*?=\s*([\d.,]+)', 'g'),
-            ('m_b10pp_z2', r'm\s+B10-PP\s+Z2\s*\[g\]\s*=.*?=\s*([\d.,]+)', 'g'),
-            ('m_b20st',    r'm\s+B20-ST\s*\[g\]\s*=.*?=\s*([\d.,]+)',       'g'),
-            ('beladung',   r'Beladung\s*\[g\s*Cake/L.*?\]\s*=.*?=\s*([\d.,]+)', 'g/L'),
-            ('v_ofen_bak_b20', r'V\s+Ofen\s+BAK\s+B20.*?([\d.,]+)',         'L'),
-            ('v_netto_npz',    r'V\s+(?:B20-ST\s+)?Netto\s+nPZ.*?([\d.,]+)','L'),
-        ]:
-            m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
-            if m:
-                raw = m.group(1).strip()
-                num = parse_number(raw)
-                # only add if not already present from calc extractor
-                existing = session.query(Field).filter(
-                    Field.batch_id == bid,
-                    Field.page_id  == pid,
-                    Field.field_name == fname,
-                ).first()
-                if not existing:
-                    add_field(fname, raw, str(num) if num is not None else raw, unit)
+            # mass-volume fields (generic) — only add if not already present in
+            # this section from the calc extractor above
+            for fname, pat, unit in _MASS_VOLUME_FIELDS:
+                m = re.search(pat, seg_text, re.IGNORECASE | re.DOTALL)
+                if m:
+                    raw = m.group(1).strip()
+                    num = parse_number(raw)
+                    existing = session.query(Field).filter(
+                        Field.batch_id == bid,
+                        Field.page_id  == pid,
+                        Field.field_name == fname,
+                        Field.section == seg_section,
+                    ).first()
+                    if not existing:
+                        add_field(fname, raw,
+                                  str(num) if num is not None else raw,
+                                  unit, sec=seg_section)
