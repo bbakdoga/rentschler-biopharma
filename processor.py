@@ -405,9 +405,11 @@ class BPRProcessor:
             ))
 
         # ── checkboxes ───────────────────────────────────────────────────────
+        #   state is 'checked' / 'unchecked' / 'unknown'; only an explicit empty
+        #   box ('unchecked') is later flagged — ambiguous OCR marks ('unknown')
+        #   are not, to avoid false "missing check" errors.
         for cb in extract_checkboxes(text):
-            state = 'checked' if cb['checked'] else 'none'
-            add_field('checkbox', cb['context'], state)
+            add_field('checkbox', cb['context'], cb['state'])
 
         # ── generic timestamps ───────────────────────────────────────────────
         for ts in extract_timestamps(text):

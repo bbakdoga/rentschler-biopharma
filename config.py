@@ -21,10 +21,24 @@ DISPLAY_JPEG_QUALITY = 88
 OCR_CONFIDENCE_WARN = 60
 
 # ── OCR backend ───────────────────────────────────────────────────────────────
-# "tesseract" (default, CPU-only) or "llm" (hybrid Tesseract geometry + an
-# offline Ollama vision model that re-reads the handwritten / low-confidence
-# entries). Switch on with:  OCR_BACKEND=llm  (env or here).
+# "tesseract" (default, CPU-only), "llm" (hybrid Tesseract geometry + an offline
+# Ollama vision model), or "api" (same hybrid pipeline but the vision reads go to
+# a hosted OpenAI-compatible endpoint serving a strong OPEN-WEIGHTS model). Switch
+# with:  OCR_BACKEND=llm  or  OCR_BACKEND=api  (env or here).
 OCR_BACKEND = os.environ.get("OCR_BACKEND", "tesseract")
+
+# ── Hosted API backend (OCR_BACKEND=api) ───────────────────────────────────────
+# An OpenAI-compatible /v1 vision endpoint. The default model — Qwen2.5-VL-72B —
+# is OPEN WEIGHTS and the same family as the offline qwen2.5vl:7b above, so a demo
+# run through the API matches an offline GPU deployment of the identical weights
+# (the same model file run under Ollama/vLLM on a GPU node). This keeps the claim
+# "the same model runs offline and yields the same results" literally true.
+# Works with OpenRouter / DashScope / Together / Hyperbolic / a local vLLM / a
+# remote Ollama's /v1 endpoint — set the base URL and key to match your provider.
+OPENAI_API_BASE = os.environ.get("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_VL_MODEL = os.environ.get("OPENAI_VL_MODEL", "qwen/qwen2.5-vl-72b-instruct")
+OPENAI_TIMEOUT = float(os.environ.get("OPENAI_TIMEOUT", "180"))
 
 # Offline Ollama vision server. On the cluster this runs on a GPU node; point
 # OLLAMA_HOST at it (e.g. http://node042:11434). Defaults to a local server.

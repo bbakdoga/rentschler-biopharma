@@ -34,9 +34,13 @@ class LLMEngine:
     """Tesseract for geometry, a vision-LLM for handwriting."""
 
     def __init__(self, threshold: int = LLM_CORRECT_BELOW,
-                 max_crops: int = LLM_MAX_CROPS_PER_PAGE):
+                 max_crops: int = LLM_MAX_CROPS_PER_PAGE,
+                 client=None):
         self.tess = TesseractEngine()
-        self.client = OllamaVisionClient()
+        # Inject any client exposing the OllamaVisionClient interface
+        # (transcribe / read_page / read_structured_page); defaults to the
+        # offline Ollama client. The api backend passes an OpenAIVisionClient.
+        self.client = client if client is not None else OllamaVisionClient()
         self.threshold = threshold
         self.max_crops = max_crops
 

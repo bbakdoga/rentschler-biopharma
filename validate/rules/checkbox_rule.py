@@ -1,10 +1,17 @@
 """
 Rule 3 – Checkbox completeness.
-For every O Ja / O Nein pair detected on a page, exactly one must be selected.
-We store checkboxes as fields with field_name='checkbox' and parsed_value='ja_checked' / 'nein_checked' / 'none'.
+A checkbox field carries state 'checked' / 'unchecked' / 'unknown'. Only an
+EXPLICIT empty box ('unchecked', i.e. a ☐/□ glyph) is flagged as a missing
+selection. An ambiguous OCR mark ('unknown' — a bare 'O'/circle that can't be
+told apart from a bullet or the letter O) is NOT flagged: a handwritten check
+can't be reliably recovered from transcribed text, and flagging those produced
+dozens of false positives.
 """
 from validate.rules.base_rule import BaseRule
 from db.models import Batch, Field
+
+# Glyphs that mark a box as genuinely empty (vs. an ambiguous OCR 'O').
+_EMPTY_GLYPHS = ('☐', '□', '▢', '◻')
 
 
 class CheckboxRule(BaseRule):
@@ -23,11 +30,17 @@ class CheckboxRule(BaseRule):
 
         for f in checkbox_fields:
             val = (f.parsed_value or '').lower()
-            if val == 'none' or not val:
+            ctx = f.raw_value or ''
+            # Flag the new explicit 'unchecked' state. For batches extracted
+            # before the 3-state change (everything stored as 'none'), fall back
+            # to only flagging when the context shows an explicit empty-box glyph
+            # — so --revalidate already drops the false positives.
+            flag = (val == 'unchecked'
+                    or (val in ('none', '') and any(g in ctx for g in _EMPTY_GLYPHS)))
+            if flag:
                 results.append(self.err(
                     batch.id,
-                    f"Unchecked checkbox — context: '{f.raw_value}' "
-                    f"in §{f.section}",
+                    f"Unchecked checkbox — context: '{ctx}' in §{f.section}",
                     section=f.section,
                     field_name='checkbox'
                 ))

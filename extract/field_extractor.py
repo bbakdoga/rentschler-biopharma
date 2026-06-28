@@ -103,16 +103,20 @@ def extract_personnel(text: str) -> list[dict]:
 
 
 # ── signatures ────────────────────────────────────────────────────────────────
+# (?<!\d) anchors the day to a digit boundary so a greedy gap can't swallow the
+# day's first digit (which turned '10.06.2016' into an unparseable '0.06.2016').
 _SIG_RE = re.compile(
     r'(Bearbeitet|Gepr[üu]ft)\s*[:\s]*\(?Datum/K.rzel\)?[:\s]*'
-    r'(\d{1,2}[./]\d{2}[./]\d{4})\s*/\s*([a-z]{2,5})',
+    r'(?<!\d)(\d{1,2}[./]\d{2}[./]\d{4})\s*/\s*([a-z]{2,5})',
     re.IGNORECASE
 )
 
 _SIG_LOOSE_RE = re.compile(
-    # Sometimes OCR merges or adds spaces; this looser form catches those
-    r'(Bearbeitet|Gepr[üu]ft)[^\n]{0,40}'
-    r'(\d{1,2}[./]\d{2}[./]\d{4})\s*/\s*([a-z]{2,5})',
+    # Sometimes OCR merges or adds spaces; this looser form catches those. The
+    # gap is lazy and the date is digit-boundary anchored so it can't start
+    # mid-number.
+    r'(Bearbeitet|Gepr[üu]ft)[^\n]{0,40}?'
+    r'(?<!\d)(\d{1,2}[./]\d{2}[./]\d{4})\s*/\s*([a-z]{2,5})',
     re.IGNORECASE
 )
 
@@ -132,31 +136,47 @@ def extract_signatures(text: str, section: str) -> list[dict]:
 
 
 # ── checkbox states ───────────────────────────────────────────────────────────
+# A handwritten check can't be reliably recovered from transcribed text, so we
+# only trust EXPLICIT box glyphs: ☑/✓/● = checked, ☐/□ = empty. A bare letter
+# "O"/"0" or a circle (©®) is AMBIGUOUS in OCR (box? bullet? the letter O?) and
+# is classified 'unknown' — never flagged as a missing check, which is what
+# produced dozens of false "unchecked" errors.
+_CHECKED_GLYPHS = set('☑☒✓✗🗹🗸●⊙⊕◉Ø')
+_EMPTY_GLYPHS = set('☐□▢◻')
+_AMBIG_GLYPHS = set('O0o©®°')
+_ALL_GLYPHS = _CHECKED_GLYPHS | _EMPTY_GLYPHS | _AMBIG_GLYPHS
+
 _CHECKBOX_RE = re.compile(
-    r'([O©®⊙⊕◉✓☑●Ø0°]\s*(?:Ja|Nein)|(?:Ja|Nein)\s*[O©®⊙⊕◉✓☑●Ø0°])',
+    r'([☑☒✓✗🗹🗸●⊙⊕◉Ø☐□▢◻O0©®°]\s*(?:Ja|Nein)'
+    r'|(?:Ja|Nein)\s*[☑☒✓✗🗹🗸●⊙⊕◉Ø☐□▢◻O0©®°])',
     re.UNICODE | re.IGNORECASE
 )
-_SELECTED = set('©®⊙⊕◉✓☑●Ø')
-_UNSELECTED = {'O', '0', 'o'}
 
 
-def classify_checkbox(token: str) -> tuple[str, bool]:
-    """Return (label, is_checked)."""
+def classify_checkbox(token: str) -> tuple[str, str]:
+    """Return (label, state) where state is 'checked', 'unchecked' or
+    'unknown'. Only an explicit glyph yields checked/unchecked; an ambiguous
+    OCR 'O'/circle is 'unknown'."""
     upper = token.upper()
     label = 'Ja' if 'JA' in upper else 'Nein'
-    char = token.strip()[0]
-    checked = char in _SELECTED or (char not in _UNSELECTED and char.isalpha() is False)
-    return label, checked
+    glyph = next((c for c in token if c in _ALL_GLYPHS), '')
+    if glyph in _CHECKED_GLYPHS:
+        state = 'checked'
+    elif glyph in _EMPTY_GLYPHS:
+        state = 'unchecked'
+    else:
+        state = 'unknown'
+    return label, state
 
 
 def extract_checkboxes(text: str) -> list[dict]:
     boxes = []
     for m in _CHECKBOX_RE.finditer(text):
-        label, checked = classify_checkbox(m.group(0))
+        label, state = classify_checkbox(m.group(0))
         # capture preceding label text for context (up to 80 chars)
         start = max(0, m.start() - 80)
         ctx = text[start:m.start()].replace('\n', ' ').strip()
-        boxes.append({'context': ctx[-60:], 'label': label, 'checked': checked,
+        boxes.append({'context': ctx[-60:], 'label': label, 'state': state,
                       'pos': m.start()})
     return boxes
 
