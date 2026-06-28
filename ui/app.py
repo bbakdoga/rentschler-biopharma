@@ -671,8 +671,7 @@ class BPRApp:
 
             ok = err == 0
             self._c_stat['val'].config(text='PASS' if ok else 'FAIL')
-            color = '#27AE60' if ok else '#C0392B'
-            self._c_stat['frame'].config(bg=color)
+            color = '#1D9D64' if ok else '#C93A34'
             self._c_stat['val'].config(bg=color)
             self._c_stat['title'].config(bg=color)
 
