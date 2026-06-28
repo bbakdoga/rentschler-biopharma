@@ -24,16 +24,9 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 3. Tesseract
-if ! command -v tesseract &>/dev/null; then
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        echo "Installing Tesseract via Homebrew…"
-        brew install tesseract tesseract-lang
-    else
-        echo "Installing Tesseract via apt…"
-        sudo apt-get install -y tesseract-ocr tesseract-ocr-deu
-    fi
-fi
+# 3. PaddleOCR runtime
+# PaddleOCR is installed via requirements.txt. The first OCR run may download
+# model files automatically into the local cache.
 
 echo ""
 echo "Setup complete."

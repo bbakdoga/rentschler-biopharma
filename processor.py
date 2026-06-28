@@ -180,7 +180,7 @@ class BPRProcessor:
                 # reconstructed from them for section identification.
                 # The colour display image shares geometry with proc_img; the
                 # LLM backend reads handwriting crops from it for better
-                # fidelity (Tesseract ignores source_img).
+                # fidelity (base OCR ignores source_img if it does not need it).
                 try:
                     words = self.ocr.extract_words_with_conf(
                         proc_img, source_img=disp_img)

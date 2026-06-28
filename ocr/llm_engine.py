@@ -1,14 +1,14 @@
 """
-Hybrid OCR engine: Tesseract geometry + offline vision-LLM handwriting.
+Hybrid OCR engine: PaddleOCR geometry + offline vision-LLM handwriting.
 
-Tesseract reads printed labels well but struggles with handwriting. This engine
-keeps Tesseract for the page layout (word boxes, confidences) and re-reads only
-the *low-confidence runs* — i.e. the handwritten, filled-in values — with an
-offline Ollama vision model, replacing their text while keeping their bounding
-boxes.
+PaddleOCR reads printed labels well but still struggles with handwriting. This
+engine keeps PaddleOCR for the page layout (word boxes, confidences) and
+re-reads only the *low-confidence runs* — i.e. the handwritten, filled-in
+values — with an offline Ollama vision model, replacing their text while
+keeping their bounding boxes.
 
 Because it implements the same ``extract_words_with_conf`` / ``extract_text``
-contract as :class:`TesseractEngine`, it is a drop-in replacement: everything
+contract as :class:`PaddleOCREngine`, it is a drop-in replacement: everything
 downstream (line reconstruction, label/value pairing, viewer overlays, the
 regex field extractors) keeps working unchanged and simply sees more accurate
 text for the handwritten entries.
@@ -24,38 +24,38 @@ from config import (
     LLM_MIN_CROP_WIDTH,
     LLM_MIN_CROP_HEIGHT,
 )
-from ocr.tesseract_engine import TesseractEngine
+from ocr.paddle_engine import PaddleOCREngine
 from ocr.ollama_client import OllamaVisionClient
 from extract.generic_extractor import _group_lines
 
 
 class LLMEngine:
-    """Tesseract for geometry, a vision-LLM for handwriting."""
+    """PaddleOCR for geometry, a vision-LLM for handwriting."""
 
     def __init__(self, threshold: int = LLM_CORRECT_BELOW,
                  max_crops: int = LLM_MAX_CROPS_PER_PAGE):
-        self.tess = TesseractEngine()
+        self.base_ocr = PaddleOCREngine()
         self.client = OllamaVisionClient()
         self.threshold = threshold
         self.max_crops = max_crops
 
-    # ── public API (mirrors TesseractEngine) ───────────────────────────────────
+    # ── public API (mirrors PaddleOCREngine) ───────────────────────────────────
     def extract_text(self, img: Image.Image, psm: int = 6,
                      source_img: Image.Image | None = None) -> str:
         """Full-page read. Prefer the vision-LLM (handles handwriting); fall
-        back to Tesseract if the server is unreachable."""
+        back to PaddleOCR if the server is unreachable."""
         page = self.client.read_page(source_img if source_img is not None else img)
         if page:
             return page
-        return self.tess.extract_text(img, psm=psm)
+        return self.base_ocr.extract_text(img, psm=psm, source_img=source_img)
 
     def extract_words_with_conf(self, img: Image.Image,
                                 source_img: Image.Image | None = None
                                 ) -> list[dict]:
-        """Tesseract word boxes with handwritten (low-confidence) runs re-read
+        """PaddleOCR word boxes with handwritten (low-confidence) runs re-read
         by the vision-LLM. ``source_img`` is the colour display image that
         shares geometry with ``img``; crops come from it for better fidelity."""
-        words = self.tess.extract_words_with_conf(img)
+        words = self.base_ocr.extract_words_with_conf(img, source_img=source_img)
         if not words:
             # Nothing detected (e.g. a fully handwritten page). Let the caller
             # fall back to a full-page LLM read via extract_text().
@@ -82,7 +82,7 @@ class LLMEngine:
                         budget -= 1
                         out.append(merged)
                     else:
-                        out.extend(run)        # keep Tesseract guess on failure
+                        out.extend(run)        # keep PaddleOCR guess on failure
                     i = j
                 else:
                     out.append(line[i])
@@ -117,7 +117,7 @@ class LLMEngine:
             )
 
         text = self.client.transcribe(crop)
-        if text is None:                       # server error → keep Tesseract
+        if text is None:                       # server error → keep base OCR
             return None
         text = text.strip()
         if not text:                           # model saw nothing → keep guess

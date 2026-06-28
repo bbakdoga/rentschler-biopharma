@@ -7,7 +7,7 @@ all a vision model needs to transcribe a crop or a whole page.
 
 Only the Python standard library is used so this adds no dependency and runs on
 the bare cluster module Python. Every network failure degrades gracefully:
-methods return ``None`` and the caller keeps the Tesseract result.
+methods return ``None`` and the caller keeps the base OCR result.
 """
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ class OllamaVisionClient:
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             if not self._warned:
                 print(f"[ollama] vision request failed ({exc}); "
-                      f"falling back to Tesseract text.", file=sys.stderr)
+                      f"falling back to base OCR text.", file=sys.stderr)
                 self._warned = True
             return None
 

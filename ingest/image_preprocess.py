@@ -74,7 +74,7 @@ class ImagePreprocessor:
         Both share the same geometry (deskew is applied once), so bounding
         boxes from the OCR image line up exactly on the display image. The
         display image is the deskewed *colour* page — readable for a viewer —
-        while the OCR image is additionally binarised for Tesseract.
+        while the OCR image is additionally binarised for the OCR engine.
         """
         arr = self._to_cv2(img)
         arr = self.deskew(arr)
