@@ -13,16 +13,16 @@ from db.models import Batch, Page, ValidationResult, Field, Signature, Personnel
 from config import OCR_CONFIDENCE_WARN
 
 THEME = {
-    'bg': '#EEF2F7',
+    'bg': '#F3F6FA',
     'panel': '#FFFFFF',
-    'panel_alt': '#F7F9FC',
-    'brand': '#163A5F',
-    'brand_alt': '#245B8E',
-    'accent': '#0EA5A4',
-    'text': '#1F2937',
-    'muted': '#6B7280',
-    'border': '#D7DFEA',
-    'status': '#E9EEF5',
+    'panel_alt': '#EAF0F6',
+    'brand': '#0F2747',
+    'brand_alt': '#1C4E80',
+    'accent': '#14B8A6',
+    'text': '#122033',
+    'muted': '#66758A',
+    'border': '#D7E0EA',
+    'status': '#EAF0F6',
 }
 
 SEVERITY_COLOR = {
@@ -75,15 +75,15 @@ class BPRApp:
         self._style()
 
         # ── toolbar ──────────────────────────────────────────────────────────
-        bar = tk.Frame(self.root, bg=THEME['brand'], height=70)
+        bar = tk.Frame(self.root, bg=THEME['brand'], height=74)
         bar.pack(fill='x')
         bar.pack_propagate(False)
         title_wrap = tk.Frame(bar, bg=THEME['brand'])
-        title_wrap.pack(side='left', padx=16, pady=8)
+        title_wrap.pack(side='left', padx=18, pady=9)
         tk.Label(title_wrap, text="BPR Validation Console", bg=THEME['brand'], fg='white',
-                 font=('Segoe UI Semibold', 14)).pack(anchor='w')
+             font=('Segoe UI Semibold', 15)).pack(anchor='w')
         tk.Label(title_wrap, text="OCR, validation, and report export in one workflow",
-                 bg=THEME['brand'], fg='#D5E2F1', font=('Segoe UI', 9)).pack(anchor='w')
+             bg=THEME['brand'], fg='#C9D7E6', font=('Segoe UI', 9)).pack(anchor='w')
 
         self._toolbar_button(bar, "Export Excel", self._export, '#1D9D64', padx=8)
         self._toolbar_button(bar, "Export Boxed PDF", self._export_boxed_pdf,
@@ -175,19 +175,37 @@ class BPRApp:
         white), so we style a ``tk.Label`` instead, which honors colors on
         every platform.
         """
-        btn = tk.Label(parent, text=f"  {text}  ", bg=color, fg='white',
-                   font=('Segoe UI Semibold', 9), cursor='hand2', padx=8, pady=5)
-        btn.pack(side='right', padx=padx, pady=10)
+        wrap = tk.Frame(parent, bg=color, highlightthickness=1,
+                        highlightbackground=self._darken(color, 0.78))
+        wrap.pack(side='right', padx=padx, pady=12)
+        btn = tk.Label(wrap, text=text, bg=color, fg='white',
+                   font=('Segoe UI Semibold', 10), cursor='hand2', padx=14, pady=7)
+        btn.pack()
         btn._base_color = color
         btn._enabled = True
+        btn._wrapper = wrap
 
         def on_click(_e):
             if btn._enabled:
                 command()
 
         btn.bind('<Button-1>', on_click)
-        btn.bind('<Enter>', lambda _e: btn._enabled and btn.config(bg=self._darken(color)))
-        btn.bind('<Leave>', lambda _e: btn.config(bg=color if btn._enabled else '#95A5A6'))
+        def on_enter(_e):
+            if btn._enabled:
+                hovered = self._darken(color)
+                btn.config(bg=hovered)
+                wrap.config(bg=hovered, highlightbackground=self._darken(hovered, 0.78))
+
+        def on_leave(_e):
+            base = color if btn._enabled else '#8093A7'
+            btn.config(bg=base)
+            wrap.config(bg=base, highlightbackground=self._darken(base, 0.78))
+
+        btn.bind('<Enter>', on_enter)
+        btn.bind('<Leave>', on_leave)
+        wrap.bind('<Button-1>', on_click)
+        wrap.bind('<Enter>', on_enter)
+        wrap.bind('<Leave>', on_leave)
         return btn
 
     @staticmethod
@@ -200,8 +218,10 @@ class BPRApp:
     @staticmethod
     def _set_button_enabled(btn, enabled):
         btn._enabled = enabled
-        btn.config(bg=btn._base_color if enabled else '#95A5A6',
-                   cursor='hand2' if enabled else 'arrow')
+        color = btn._base_color if enabled else '#8093A7'
+        btn.config(bg=color, cursor='hand2' if enabled else 'arrow')
+        if hasattr(btn, '_wrapper'):
+            btn._wrapper.config(bg=color, highlightbackground=BPRApp._darken(color, 0.78))
 
     def _style(self):
         s = ttk.Style()
@@ -211,10 +231,11 @@ class BPRApp:
         s.configure('TNotebook', background=THEME['bg'], borderwidth=0)
         s.configure('TNotebook.Tab',
                 font=('Segoe UI Semibold', 9),
-                padding=(12, 8),
+                padding=(18, 10),
                 background=THEME['panel_alt'],
                 foreground=THEME['muted'])
         s.map('TNotebook.Tab',
+              padding=[('selected', (18, 10)), ('active', (18, 10))],
               background=[('selected', THEME['panel'])],
               foreground=[('selected', THEME['brand'])])
 
@@ -227,7 +248,7 @@ class BPRApp:
                 bordercolor=THEME['border'])
         s.configure('Treeview.Heading',
                 font=('Segoe UI Semibold', 9),
-                background='#EAF0F8',
+            background='#EDF3F9',
                 foreground=THEME['brand'],
                 relief='flat')
         s.map('Treeview',
@@ -243,8 +264,13 @@ class BPRApp:
 
         s.configure('ViewerNav.TButton',
                 font=('Segoe UI Semibold', 9),
-                padding=(9, 4),
-                foreground=THEME['brand'])
+                padding=(12, 6),
+                foreground=THEME['brand'],
+                background=THEME['panel'],
+                borderwidth=0)
+        s.map('ViewerNav.TButton',
+              background=[('active', THEME['panel_alt'])],
+              foreground=[('active', THEME['brand'])])
 
     def _card(self, parent, title, value, color):
         f = tk.Frame(parent, bg=color, width=130, height=76,
@@ -278,7 +304,7 @@ class BPRApp:
         nb.add(frame, text="Page Viewer")
 
         # navigation bar
-        nav = tk.Frame(frame, bg='#EAF0F8')
+        nav = tk.Frame(frame, bg=THEME['panel_alt'])
         nav.pack(fill='x')
         ttk.Button(nav, text='Prev', command=self._viewer_prev,
                    style='ViewerNav.TButton').pack(side='left', padx=(6, 2), pady=4)
