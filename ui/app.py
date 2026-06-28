@@ -240,12 +240,11 @@ class BPRApp:
               foreground=[('selected', THEME['brand'])])
 
         s.configure('Treeview',
-                font=('Segoe UI', 9),
-                rowheight=24,
-                background=THEME['panel'],
-                fieldbackground=THEME['panel'],
-                foreground=THEME['text'],
-                bordercolor=THEME['border'])
+                    font=('Segoe UI', 9),
+                    rowheight=24,
+                    background=THEME['panel'],
+                    fieldbackground=THEME['panel'],
+                    foreground=THEME['text'])
         s.configure('Treeview.Heading',
                 font=('Segoe UI Semibold', 9),
             background='#EDF3F9',
