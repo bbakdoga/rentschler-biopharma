@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 from db.session import get_session
 from db.models import Batch, Page, ValidationResult, Field, Signature, Personnel
 from config import OCR_CONFIDENCE_WARN
+from ui.dashboard import ManagerDashboard
 
 SEVERITY_COLOR = {
     'error':   '#FFCCCC',
@@ -66,6 +67,7 @@ class BPRApp:
         bar.pack_propagate(False)
         tk.Label(bar, text="BPR Validation Tool", bg='#1F3864', fg='white',
                  font=('Arial', 14, 'bold')).pack(side='left', padx=16, pady=12)
+        self._toolbar_button(bar, "Dashboard", self._open_dashboard, '#1A5276', padx=4)
         self._toolbar_button(bar, "Export Excel", self._export, '#27AE60', padx=8)
         self._toolbar_button(bar, "Export Boxed PDF", self._export_boxed_pdf,
                              '#8E44AD', padx=4)
@@ -635,7 +637,13 @@ class BPRApp:
         finally:
             session.close()
         self._viewer_load_batch(batch_id)
-
+    def _open_dashboard(self):
+        """Open (or raise) the manager dashboard window."""
+        if hasattr(self, '_dashboard_win') and self._dashboard_win.winfo_exists():
+            self._dashboard_win.lift()
+            self._dashboard_win.focus_force()
+            return
+        self._dashboard_win = ManagerDashboard(self.root)
     # ── run ───────────────────────────────────────────────────────────────────
     def run(self):
         self.root.mainloop()
