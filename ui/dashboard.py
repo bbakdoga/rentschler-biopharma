@@ -161,6 +161,7 @@ class ManagerDashboard(tk.Toplevel):
         self._make_history_tab(nb)
         self._make_person_tab(nb)
         self._make_risk_tab(nb)
+        self._make_review_queue_tab(nb)
 
     # ── hero panel skeleton (populated later) ────────────────────────────────
     def _build_hero_panel(self, parent):
@@ -365,6 +366,7 @@ class ManagerDashboard(tk.Toplevel):
         self._populate_history()
         self._populate_personnel()
         self._populate_risk_heatmap()
+        self._populate_review_queue()
 
     def _on_mode_change(self):
         self._populate_activity()
@@ -978,4 +980,270 @@ class ManagerDashboard(tk.Toplevel):
             messagebox.showinfo("Success", f"Risk report exported to:\n{path}")
         except Exception as e:
             messagebox.showerror("Export Failed", f"Error: {e}")
+
+    # ── review queue ────────────────────────────────────────────────────────
+    def _make_review_queue_tab(self, nb):
+        """Confidence-gated review queue with risk lanes for managers."""
+        f = tk.Frame(nb, bg=C_BG)
+        nb.add(f, text='  🚦  Review Queue  ')
+
+        hdr = tk.Frame(f, bg=C_BG)
+        hdr.pack(fill='x', padx=10, pady=(8, 4))
+        tk.Label(hdr, text='Confidence-Gated Review Queue',
+                 bg=C_BG, fg=C_HEADER, font=FONT_TITLE).pack(side='left')
+
+        export_btn = tk.Label(hdr, text=' 📄 Export Queue ',
+                              bg=C_ACCENT, fg='white',
+                              font=('Segoe UI', 9, 'bold'),
+                              cursor='hand2', padx=8, pady=4)
+        export_btn.pack(side='right')
+        export_btn.bind('<Button-1>', lambda _e: self._export_review_queue())
+        export_btn.bind('<Enter>', lambda _e: export_btn.config(bg='#1A5276'))
+        export_btn.bind('<Leave>', lambda _e: export_btn.config(bg=C_ACCENT))
+
+        lane_strip = tk.Frame(f, bg=C_BG)
+        lane_strip.pack(fill='x', padx=10, pady=(0, 4))
+        self._queue_lane_cards = {}
+        for lane, bg, fg in [('CRITICAL', C_FAIL_LT, C_FAIL),
+                             ('REVIEW SOON', C_WARN_LT, C_WARN),
+                             ('SAFE', C_PASS_LT, C_PASS)]:
+            card = tk.Frame(lane_strip, bg=bg, width=180, height=52)
+            card.pack(side='left', padx=(0, 6))
+            card.pack_propagate(False)
+            lbl = tk.Label(card, text=f'{lane}: 0', bg=bg, fg=fg,
+                           font=('Segoe UI', 10, 'bold'))
+            lbl.pack(expand=True)
+            self._queue_lane_cards[lane] = lbl
+
+        body = tk.Frame(f, bg=C_BG)
+        body.pack(fill='both', expand=True, padx=10, pady=(0, 8))
+
+        left_outer, left = _card_frame(body)
+        left_outer.pack(side='left', fill='both', expand=True, padx=(0, 4))
+        tk.Label(left, text='Priority List', bg=C_CARD, fg=C_HEADER,
+                 font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=12,
+                                                     pady=(10, 4))
+
+        cols = ('lane', 'score', 'batch', 'status', 'err', 'warn', 'lowc', 'out', 'updated')
+        hdrs = ('Lane', 'Risk', 'Batch', 'Status', 'Err', 'Warn', 'LowConf', 'Outliers', 'Updated')
+        widths = (110, 60, 100, 90, 45, 45, 70, 60, 130)
+        tv = ttk.Treeview(left, columns=cols, show='headings')
+        for cid, hdr_txt, w in zip(cols, hdrs, widths):
+            tv.heading(cid, text=hdr_txt)
+            tv.column(cid, width=w, anchor='center')
+        sb = ttk.Scrollbar(left, command=tv.yview)
+        tv.configure(yscrollcommand=sb.set)
+        sb.pack(side='right', fill='y', pady=(0, 4))
+        tv.pack(fill='both', expand=True, padx=4, pady=(0, 4))
+        tv.bind('<<TreeviewSelect>>', self._on_queue_select)
+        self._queue_tree = tv
+
+        right_outer, right = _card_frame(body)
+        right_outer.pack(side='right', fill='y', expand=False, padx=(4, 0))
+        right.configure(width=320)
+        right.pack_propagate(False)
+
+        tk.Label(right, text='Selected Batch Details',
+                 bg=C_CARD, fg=C_HEADER, font=('Segoe UI', 11, 'bold')).pack(
+                     anchor='w', padx=12, pady=(10, 4))
+        self._queue_detail = tk.Label(right, text='Select a row to inspect risk drivers.',
+                                      bg=C_CARD, fg=C_TEXT, justify='left',
+                                      anchor='nw', font=FONT_LABEL, wraplength=290)
+        self._queue_detail.pack(fill='both', expand=True, padx=12, pady=(4, 10))
+
+    def _build_batch_anomaly_map(self):
+        """Count medium/high sigma outliers per batch from numeric parsed fields."""
+        field_values = defaultdict(list)
+        for fld in getattr(self, '_fields', []):
+            if not fld.parsed_value:
+                continue
+            try:
+                val = float(str(fld.parsed_value).replace(',', '.'))
+            except (ValueError, TypeError):
+                continue
+            if not fld.field_name:
+                continue
+            field_values[fld.field_name].append((fld.batch_id, val))
+
+        by_batch = defaultdict(lambda: {'high': 0, 'medium': 0})
+        for _, values in field_values.items():
+            if len(values) < 3:
+                continue
+            only_vals = [x[1] for x in values]
+            try:
+                mu = statistics.mean(only_vals)
+                sd = statistics.stdev(only_vals)
+            except statistics.StatisticsError:
+                continue
+            if sd <= 0:
+                continue
+            for batch_id, val in values:
+                z = abs(val - mu) / sd
+                if z > 3.0:
+                    by_batch[batch_id]['high'] += 1
+                elif z > 1.0:
+                    by_batch[batch_id]['medium'] += 1
+        return by_batch
+
+    def _score_batch_risk(self, batch, vals_by_batch, low_conf_by_batch, anomaly_by_batch):
+        vals = vals_by_batch.get(batch.id, [])
+        errors = sum(1 for v in vals if v.severity == 'error')
+        warns = sum(1 for v in vals if v.severity == 'warning')
+        infos = sum(1 for v in vals if v.severity == 'info')
+        low_conf = low_conf_by_batch.get(batch.id, 0)
+        out_high = anomaly_by_batch.get(batch.id, {}).get('high', 0)
+        out_med = anomaly_by_batch.get(batch.id, {}).get('medium', 0)
+
+        score = (
+            errors * 12 +
+            warns * 5 +
+            infos * 1 +
+            low_conf * 3 +
+            out_high * 10 +
+            out_med * 4
+        )
+        if (batch.status or '') == 'failed':
+            score += 8
+        elif (batch.status or '') == 'pending':
+            score += 4
+
+        if score >= 35 or errors >= 3 or out_high > 0:
+            lane = 'CRITICAL'
+        elif score >= 15 or warns >= 3 or low_conf >= 4:
+            lane = 'REVIEW SOON'
+        else:
+            lane = 'SAFE'
+
+        return {
+            'lane': lane,
+            'score': score,
+            'errors': errors,
+            'warns': warns,
+            'infos': infos,
+            'low_conf': low_conf,
+            'out_high': out_high,
+            'out_med': out_med,
+        }
+
+    def _populate_review_queue(self):
+        if not hasattr(self, '_queue_tree'):
+            return
+
+        vals_by_batch = defaultdict(list)
+        for v in self._val_all:
+            vals_by_batch[v.batch_id].append(v)
+
+        low_conf_by_batch = defaultdict(int)
+        for fld in self._fields:
+            if fld.confidence is None:
+                continue
+            conf = fld.confidence
+            if conf <= 1.0:
+                conf = conf * 100.0
+            if conf < 60:
+                low_conf_by_batch[fld.batch_id] += 1
+
+        anomaly_by_batch = self._build_batch_anomaly_map()
+
+        rows = []
+        lane_counts = {'CRITICAL': 0, 'REVIEW SOON': 0, 'SAFE': 0}
+        for b in self._batches:
+            risk = self._score_batch_risk(b, vals_by_batch, low_conf_by_batch,
+                                          anomaly_by_batch)
+            lane_counts[risk['lane']] += 1
+            ts = b.processed_at or b.created_at
+            ts_text = ts.strftime('%Y-%m-%d %H:%M') if ts else '—'
+            rows.append({
+                'batch_id': b.id,
+                'batch_no': b.batch_no or f'#{b.id}',
+                'status': (b.status or 'pending').upper(),
+                'updated': ts_text,
+                **risk,
+            })
+
+        lane_order = {'CRITICAL': 0, 'REVIEW SOON': 1, 'SAFE': 2}
+        rows.sort(key=lambda r: (lane_order[r['lane']], -r['score'], r['batch_no']))
+        self._review_queue_rows = rows
+
+        for lane, lbl in self._queue_lane_cards.items():
+            lbl.config(text=f'{lane}: {lane_counts.get(lane, 0)}')
+
+        tv = self._queue_tree
+        tv.delete(*tv.get_children())
+        for r in rows:
+            out_total = r['out_high'] + r['out_med']
+            tv.insert('', 'end', iid=str(r['batch_id']), values=(
+                r['lane'],
+                r['score'],
+                r['batch_no'],
+                r['status'],
+                r['errors'],
+                r['warns'],
+                r['low_conf'],
+                out_total,
+                r['updated'],
+            ), tags=(r['lane'],))
+
+        tv.tag_configure('CRITICAL', background=C_FAIL_LT)
+        tv.tag_configure('REVIEW SOON', background=C_WARN_LT)
+        tv.tag_configure('SAFE', background=C_PASS_LT)
+
+        self._queue_detail.config(text='Select a row to inspect risk drivers.')
+
+    def _on_queue_select(self, _event=None):
+        if not hasattr(self, '_review_queue_rows'):
+            return
+        sel = self._queue_tree.selection()
+        if not sel:
+            return
+        batch_id = int(sel[0])
+        row = next((r for r in self._review_queue_rows if r['batch_id'] == batch_id), None)
+        if not row:
+            return
+
+        detail = [
+            f"Batch: {row['batch_no']}",
+            f"Lane: {row['lane']}",
+            f"Risk Score: {row['score']}",
+            '',
+            'Risk Drivers',
+            f"- Errors: {row['errors']} (x12)",
+            f"- Warnings: {row['warns']} (x5)",
+            f"- Low OCR Confidence fields: {row['low_conf']} (x3)",
+            f"- High outliers (>3σ): {row['out_high']} (x10)",
+            f"- Medium outliers (1-3σ): {row['out_med']} (x4)",
+        ]
+        self._queue_detail.config(text='\n'.join(detail))
+
+    def _export_review_queue(self):
+        if not hasattr(self, '_review_queue_rows') or not self._review_queue_rows:
+            messagebox.showwarning('No Data', 'No review queue data to export.')
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
+            initialfile=f"review_queue_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['BPR Confidence-Gated Review Queue'])
+                writer.writerow(['Generated:', datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
+                writer.writerow([])
+                writer.writerow(['Batch ID', 'Batch No', 'Lane', 'Risk Score',
+                                 'Status', 'Errors', 'Warnings', 'Low OCR Confidence',
+                                 'High Outliers >3σ', 'Medium Outliers 1-3σ', 'Updated'])
+                for r in self._review_queue_rows:
+                    writer.writerow([
+                        r['batch_id'], r['batch_no'], r['lane'], r['score'],
+                        r['status'], r['errors'], r['warns'], r['low_conf'],
+                        r['out_high'], r['out_med'], r['updated']
+                    ])
+            messagebox.showinfo('Success', f'Review queue exported to:\n{path}')
+        except Exception as e:
+            messagebox.showerror('Export Failed', f'Error: {e}')
 
