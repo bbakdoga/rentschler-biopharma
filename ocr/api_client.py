@@ -23,6 +23,7 @@ import base64
 import io
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -33,6 +34,14 @@ from config import (
 from ocr.ollama_client import (
     HANDWRITING_PROMPT, PAGE_PROMPT, STRUCTURED_PAGE_PROMPT,
 )
+
+# Transient failures worth retrying: rate limits (429) and upstream 5xx. A hosted
+# router (OpenRouter) returns 429 when one provider is momentarily overloaded; a
+# retry often lands on a healthy provider.
+_RETRY_STATUS = {429, 500, 502, 503, 504}
+_MAX_RETRIES = 4
+_BASE_BACKOFF = 1.5      # seconds, exponential
+_MAX_BACKOFF = 20.0
 
 
 class OpenAIVisionClient:
@@ -63,6 +72,26 @@ class OpenAIVisionClient:
             h["Authorization"] = "Bearer " + self.api_key
         return h
 
+    def _warn(self, msg: str):
+        if not self._warned:
+            print(f"[api] vision request failed: {msg}\n      falling back to "
+                  f"Tesseract text.", file=sys.stderr)
+            self._warned = True
+
+    @staticmethod
+    def _backoff(exc, attempt: int) -> float:
+        """Seconds to wait before the next retry — honour ``Retry-After`` when
+        the server sends it, otherwise exponential backoff."""
+        retry_after = getattr(exc, "headers", None)
+        if retry_after is not None:
+            val = retry_after.get("Retry-After")
+            if val:
+                try:
+                    return min(float(val), _MAX_BACKOFF)
+                except ValueError:
+                    pass
+        return min(_BASE_BACKOFF * (2 ** attempt), _MAX_BACKOFF)
+
     def _generate(self, prompt: str, img, max_tokens: int = 512) -> str | None:
         payload = {
             "model": self.model,
@@ -78,35 +107,42 @@ class OpenAIVisionClient:
             "temperature": 0.0,
             "max_tokens": max_tokens,
         }
+        # On OpenRouter, prefer higher-throughput providers and allow fallback
+        # so one rate-limited backend doesn't fail the whole request.
+        if "openrouter" in self.base:
+            payload["provider"] = {"sort": "throughput", "allow_fallbacks": True}
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(self.endpoint, data=data,
-                                     headers=self._headers())
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-            return (body["choices"][0]["message"]["content"] or "").strip()
-        except urllib.error.HTTPError as exc:
-            # Surface the provider's error body (e.g. "Invalid API-key",
-            # "Model not exist", region mismatch) — the status code alone isn't
-            # enough to debug 4xx failures.
-            detail = ""
+
+        for attempt in range(_MAX_RETRIES + 1):
+            req = urllib.request.Request(self.endpoint, data=data,
+                                         headers=self._headers())
             try:
-                detail = exc.read().decode("utf-8", "replace").strip()[:400]
-            except Exception:
-                pass
-            if not self._warned:
-                print(f"[api] vision request failed (HTTP {exc.code} "
-                      f"{exc.reason}): {detail}\n      falling back to "
-                      f"Tesseract text.", file=sys.stderr)
-                self._warned = True
-            return None
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError,
-                KeyError, IndexError) as exc:
-            if not self._warned:
-                print(f"[api] vision request failed ({exc}); "
-                      f"falling back to Tesseract text.", file=sys.stderr)
-                self._warned = True
-            return None
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                return (body["choices"][0]["message"]["content"] or "").strip()
+            except urllib.error.HTTPError as exc:
+                # Surface the provider's error body (e.g. "Invalid API-key",
+                # "Model not exist") — the status code alone isn't enough.
+                detail = ""
+                try:
+                    detail = exc.read().decode("utf-8", "replace").strip()[:400]
+                except Exception:
+                    pass
+                if exc.code in _RETRY_STATUS and attempt < _MAX_RETRIES:
+                    time.sleep(self._backoff(exc, attempt))
+                    continue            # transient (rate limit / 5xx) → retry
+                self._warn(f"HTTP {exc.code} {exc.reason}: {detail}")
+                return None
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                if attempt < _MAX_RETRIES:
+                    time.sleep(min(_BASE_BACKOFF * (2 ** attempt), _MAX_BACKOFF))
+                    continue            # network blip → retry
+                self._warn(str(exc))
+                return None
+            except (ValueError, KeyError, IndexError) as exc:
+                self._warn(f"bad response ({exc})")   # not retryable
+                return None
+        return None
 
     # ── public API (mirrors OllamaVisionClient) ─────────────────────────────────
     def transcribe(self, img, prompt: str = HANDWRITING_PROMPT) -> str | None:
